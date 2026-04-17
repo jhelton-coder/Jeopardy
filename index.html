@@ -132,6 +132,13 @@
   .save-name-input { background: #060CE9; border: 1px solid #D4A843; color: #fff; padding: 0.45rem 0.75rem; border-radius: 6px; font-size: 0.9rem; flex: 1; }
   .btn-save-confirm { background: #D4A843; color: #000; border: none; padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.9rem; font-weight: bold; cursor: pointer; white-space: nowrap; }
   .btn-save-confirm:hover { filter: brightness(1.1); }
+  .json-action-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  .btn-json { flex: 1; border: 1px solid #4a4af0; border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem; font-weight: bold; cursor: pointer; text-align: center; }
+  .btn-json-export { background: #1a1a8c; color: #D4A843; }
+  .btn-json-import { background: #1a1a8c; color: #7af; }
+  .btn-json:hover { filter: brightness(1.2); }
+  .btn-export-mid { background: none; border: 1px solid #4a4af0; color: #7af; padding: 0.3rem 0.9rem; border-radius: 6px; font-size: 0.78rem; cursor: pointer; font-weight: bold; }
+  .btn-export-mid:hover { background: rgba(100,150,255,0.15); }
 
   .persistent-scores { display: flex; justify-content: center; gap: 1rem; padding: 0.4rem 1rem; background: rgba(0,0,0,0.6); flex-wrap: wrap; width: 100%; }
 
@@ -164,8 +171,13 @@
       <input class="save-name-input" id="mid-save-name" type="text" placeholder="Save name (e.g. Game Night #1)">
       <button class="btn-save-confirm" id="mid-save-btn" onclick="saveCurrentGame()">Save Now</button>
     </div>
-    <hr style="border:none;border-top:1px solid #2a2a8a;margin:0.5rem 0 0.75rem;">
-    <div style="font-size:0.78rem;color:#888;margin-bottom:0.4rem;">Saved Games</div>
+    <div class="json-action-row">
+      <button class="btn-json btn-json-export" onclick="exportJSON()">⬇ Export</button>
+      <button class="btn-json btn-json-import" onclick="document.getElementById('json-import-file').click()">⬆ Import</button>
+    </div>
+    <input type="file" id="json-import-file" accept=".json" style="display:none">
+    <hr style="border:none;border-top:1px solid #2a2a8a;margin:0.75rem 0;">
+    <div style="font-size:0.78rem;color:#888;margin-bottom:0.4rem;">Saved Games (this browser)</div>
     <div class="save-slot-list" id="overlay-slot-list"></div>
   </div>
 </div>
@@ -224,6 +236,10 @@
     <hr class="divider">
     <div class="setup-section" style="margin-bottom:0;">
       <label>Resume a Saved Game</label>
+      <div class="json-action-row" style="margin-bottom:0.5rem;">
+        <button class="btn-json btn-json-import" onclick="document.getElementById('json-import-setup').click()">⬆ Import</button>
+      </div>
+      <input type="file" id="json-import-setup" accept=".json" style="display:none">
       <div class="save-slot-list" id="setup-slot-list"></div>
       <p id="setup-no-saves" style="font-size:0.82rem;color:#666;margin-top:0.4rem;display:none;">
         No saved games yet. During a game, click "Save Game" on the board to save your progress.
@@ -241,6 +257,7 @@
   <div class="board-header">
     <h2 id="round-label">Jeopardy! Round</h2>
     <button class="btn-save-mid" onclick="openSaveOverlay()">💾 Save Game</button>
+    <button class="btn-export-mid" onclick="exportJSON()">⬇ Export</button>
   </div>
   <div class="board-wrap" id="board-wrap">
     <!-- injected by renderBoard() -->
@@ -954,11 +971,36 @@ function slotRow(id, entry, onDelete) {
     +'</div>'
     +'<div class="save-slot-btns">'
     +'<button class="btn-tiny btn-load-sm" data-id="'+id+'">Load</button>'
+    +'<button class="btn-tiny" style="background:#1a1a8c;color:#D4A843;" data-id="'+id+'">Export</button>'
     +'<button class="btn-tiny btn-del-sm"  data-id="'+id+'">&#10005;</button>'
     +'</div>';
   row.querySelector('.btn-load-sm').addEventListener('click',function(){ loadSave(id); });
+  row.querySelectorAll('.btn-tiny')[1].addEventListener('click',function(){ exportSaveAsJSON(id); });
   row.querySelector('.btn-del-sm').addEventListener('click',function(){ deleteSave(id); onDelete(); });
   return row;
+}
+
+// Export a specific saved slot (by id) to a JSON file
+function exportSaveAsJSON(id) {
+  var saves = getSaves();
+  var entry = saves[id];
+  if (!entry) return;
+  var payload = {
+    _type: 'jeopardy-save',
+    _version: 1,
+    name: entry.name,
+    state: entry.state
+  };
+  var json = JSON.stringify(payload, null, 2);
+  var blob = new Blob([json], {type: 'application/json'});
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  var safeName = entry.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  a.href     = url;
+  a.download = 'jeopardy_' + safeName + '.json';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); document.body.removeChild(a); }, 1000);
 }
 
 function refreshOverlaySlotList() {
@@ -984,6 +1026,82 @@ function refreshSetupSlotList() {
     list.appendChild(slotRow(id, saves[id], function(){ refreshSetupSlotList(); }));
   });
 }
+
+// ── JSON Export / Import ───────────────────────────────────────────────
+// Export: serialises the current game state to a .json file and triggers
+//         a browser download. The recipient can drag/drop or browse to
+//         this file on the setup screen or inside the Save/Load overlay
+//         to resume the game from exactly the same point.
+function exportJSON() {
+  var state = buildSaveState();
+  var payload = {
+    _type: 'jeopardy-save',
+    _version: 1,
+    name: (document.getElementById('mid-save-name') && document.getElementById('mid-save-name').value.trim())
+          || ('Jeopardy Export ' + new Date().toLocaleString()),
+    state: state
+  };
+  var json = JSON.stringify(payload, null, 2);
+  var blob = new Blob([json], {type: 'application/json'});
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  // Build a tidy filename from the save name
+  var safeName = payload.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  a.href     = url;
+  a.download = 'jeopardy_' + safeName + '.json';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); document.body.removeChild(a); }, 1000);
+}
+
+// Import: reads a .json file produced by exportJSON(), stores it in
+//         localStorage under a new key, refreshes both slot lists, then
+//         immediately loads the game so play can resume.
+function importJSONFile(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var payload = JSON.parse(e.target.result);
+      // Accept both the wrapped export format and a bare state object
+      var entry;
+      if (payload._type === 'jeopardy-save' && payload.state) {
+        entry = { name: payload.name || 'Imported Save', state: payload.state };
+      } else if (payload.roundBoards && payload.players) {
+        // bare state
+        entry = { name: 'Imported Save ' + new Date().toLocaleString(), state: payload };
+      } else {
+        alert('This file does not appear to be a valid Jeopardy save.');
+        return;
+      }
+      // Validate minimum required fields
+      if (!entry.state.roundBoards || !entry.state.players) {
+        alert('Save file is missing required data.');
+        return;
+      }
+      // Store it in localStorage
+      var saves = getSaves();
+      var id = 'save_' + Date.now();
+      saves[id] = entry;
+      putSaves(saves);
+      refreshOverlaySlotList();
+      refreshSetupSlotList();
+      // Load it immediately
+      loadSave(id);
+    } catch(err) {
+      alert('Could not read the JSON file: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Wire up both file inputs (overlay + setup screen)
+document.getElementById('json-import-file').addEventListener('change', function(e){
+  if (e.target.files[0]) { importJSONFile(e.target.files[0]); e.target.value=''; }
+});
+document.getElementById('json-import-setup').addEventListener('change', function(e){
+  if (e.target.files[0]) { importJSONFile(e.target.files[0]); e.target.value=''; }
+});
 
 // Init save lists on page load
 refreshSetupSlotList();
